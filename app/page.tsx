@@ -104,12 +104,184 @@ export default function Home(){
   </div>
 }
 
-function Auth({profile,reload}:{profile:Profile|null,reload:()=>Promise<void>}){
-  const [name,setName]=useState(''); const [email,setEmail]=useState(''); const [password,setPassword]=useState('')
-  async function signUp(e:FormEvent){ e.preventDefault(); const {error}=await supabase.auth.signUp({email,password,options:{data:{display_name:name}}}); alert(error?.message||'Profil oprettet. Kontrollér eventuelt din e-mail.'); await reload() }
-  async function signIn(){ const {error}=await supabase.auth.signInWithPassword({email,password}); alert(error?.message||'Logget ind'); await reload() }
-  if(profile) return <div className="card"><h2>{profile.display_name}</h2><p><strong>{profile.credits}</strong> credits</p><button onClick={async()=>{await supabase.auth.signOut(); location.reload()}}>Log ud</button></div>
-  return <form className="card" onSubmit={signUp}><h2>Opret profil</h2><label>Navn<input required value={name} onChange={e=>setName(e.target.value)}/></label><label>E-mail<input required type="email" value={email} onChange={e=>setEmail(e.target.value)}/></label><label>Adgangskode<input required minLength={6} type="password" value={password} onChange={e=>setPassword(e.target.value)}/></label><div className="actions"><button type="submit">Opret profil</button><button type="button" className="secondary" onClick={signIn}>Log ind</button></div></form>
+function Auth({
+  profile,
+  reload,
+}: {
+  profile: Profile | null
+  reload: () => Promise<void>
+}) {
+  const [name, setName] = useState('')
+  const [password, setPassword] = useState('')
+  const [working, setWorking] = useState(false)
+  const [authMessage, setAuthMessage] = useState('')
+
+  async function signUp(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+
+    const cleanedName = name.trim()
+
+    if (cleanedName.length < 2) {
+      setAuthMessage('Navnet skal være på mindst 2 tegn.')
+      return
+    }
+
+    if (cleanedName.toLowerCase() === 'admin') {
+      setAuthMessage('Navnet Admin er reserveret.')
+      return
+    }
+
+    if (password.length < 6) {
+      setAuthMessage('Koden skal være på mindst 6 tegn.')
+      return
+    }
+
+    setWorking(true)
+    setAuthMessage('')
+
+    const { error } = await supabase.auth.signUp({
+      email: usernameToEmail(cleanedName),
+      password,
+      options: {
+        data: {
+          display_name: cleanedName,
+        },
+      },
+    })
+
+    if (error) {
+      const errorText = error.message.toLowerCase()
+
+      if (
+        errorText.includes('already') ||
+        errorText.includes('registered')
+      ) {
+        setAuthMessage(
+          'Navnet er allerede taget. Vælg et andet navn eller log ind.'
+        )
+      } else {
+        setAuthMessage(error.message)
+      }
+
+      setWorking(false)
+      return
+    }
+
+    setAuthMessage('Profilen er oprettet. Du er nu logget ind.')
+    await reload()
+    setWorking(false)
+  }
+
+  async function signIn() {
+    const cleanedName = name.trim()
+
+    if (!cleanedName || !password) {
+      setAuthMessage('Skriv både navn og kode.')
+      return
+    }
+
+    setWorking(true)
+    setAuthMessage('')
+
+    const { error } = await supabase.auth.signInWithPassword({
+      email: usernameToEmail(cleanedName),
+      password,
+    })
+
+    if (error) {
+      setAuthMessage('Forkert navn eller kode.')
+      setWorking(false)
+      return
+    }
+
+    setAuthMessage('Du er logget ind.')
+    await reload()
+    setWorking(false)
+  }
+
+  if (profile) {
+    return (
+      <div className="card">
+        <h2>{profile.display_name}</h2>
+
+        <p>
+          <strong>{profile.credits}</strong> credits
+        </p>
+
+        {profile.is_admin && (
+          <p>
+            <a href="/staevnekontor">
+              Åbn Stævnekontoret
+            </a>
+          </p>
+        )}
+
+        <button
+          type="button"
+          onClick={async () => {
+            await supabase.auth.signOut()
+            location.reload()
+          }}
+        >
+          Log ud
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <form className="card" onSubmit={signUp}>
+      <h2>Log ind eller opret profil</h2>
+
+      {authMessage && (
+        <div className="notice">
+          {authMessage}
+        </div>
+      )}
+
+      <label>
+        Navn
+        <input
+          required
+          autoComplete="username"
+          value={name}
+          onChange={event => setName(event.target.value)}
+          placeholder="Dit navn"
+        />
+      </label>
+
+      <label>
+        Kode
+        <input
+          required
+          minLength={6}
+          type="password"
+          autoComplete="current-password"
+          value={password}
+          onChange={event => setPassword(event.target.value)}
+          placeholder="Mindst 6 tegn"
+        />
+      </label>
+
+      <div className="actions">
+        <button
+          type="button"
+          disabled={working}
+          onClick={signIn}
+        >
+          {working ? 'Vent…' : 'Log ind'}
+        </button>
+
+        <button
+          type="submit"
+          className="secondary"
+          disabled={working}
+        >
+          Opret ny profil
+        </button>
+      </div>
+    </form>
+  )
 }
 
 function Leaderboard(){
