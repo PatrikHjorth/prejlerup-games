@@ -9,6 +9,24 @@ type Challenge = { id:string; title:string; description:string|null; status:'upc
 type Bet = { id:string; challenge_id:string; option_id:string; stake:number; locked_odds:number }
 type Notice = { id:string; title:string; message:string; created_at:string }
 
+function usernameToEmail(name: string) {
+  const username = name
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/æ/g, 'ae')
+    .replace(/ø/g, 'oe')
+    .replace(/å/g, 'aa')
+    .replace(/[^a-z0-9]/g, '')
+
+  if (username === 'admin') {
+    return 'kontakt@prejlerupridning.dk'
+  }
+
+  return `${username}@players.prejlerup.dk`
+}
+
 const supabase = createClient()
 
 export default function Home(){
