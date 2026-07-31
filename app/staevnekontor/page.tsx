@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase'
+import PlayerAdmin from './players'
 
 type Profile = {
   id: string
@@ -396,6 +397,7 @@ export default function StaevnekontorPage() {
           )
         })}
       </section>
+      <PlayerAdmin />
     </main>
   )
 }
