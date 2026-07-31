@@ -777,7 +777,7 @@ function Auth({
 
         <button
           type="submit"
-          className="secondary"
+          className="secondary text-black bg-yellow-400 border-2 border-black"
           disabled={working}
         >
           Opret ny profil
