@@ -22,6 +22,7 @@ type Competition = {
   description: string | null
   status: 'draft' | 'open' | 'closed' | 'finished'
   betting_closes_at: string | null
+  winning_option_id: string | null
   competition_options: CompetitionOption[]
 }
 
@@ -86,6 +87,7 @@ export default function StaevnekontorPage() {
         title,
         description,
         status,
+        winning_option_id,
         betting_closes_at,
         competition_options (
           id,
@@ -219,6 +221,48 @@ export default function StaevnekontorPage() {
     await loadPage()
   }
 
+  async function finishCompetition(
+    competition: Competition,
+    winnerOption: CompetitionOption
+  ) {
+    const confirmed = window.confirm(
+      `Afslut "${competition.title}"?\n\n` +
+        `${winnerOption.label} registreres som vinder, ` +
+        `og gevinsterne udbetales automatisk.\n\n` +
+        `Handlingen kan ikke gentages.`
+    )
+
+    if (!confirmed) return
+
+    setMessage('Afslutter dysten og udbetaler gevinster…')
+
+    const { data, error } = await supabase.rpc(
+      'finish_competition',
+      {
+        p_competition_id: competition.id,
+        p_winner_option_id: winnerOption.id,
+      }
+    )
+
+    if (error) {
+      setMessage(error.message)
+      return
+    }
+
+    const result = data as {
+      winner_count?: number
+      total_payout?: number
+    }
+
+    setMessage(
+      `Dysten er afsluttet. ` +
+        `${result.winner_count ?? 0} vinder(e) fik i alt ` +
+        `${result.total_payout ?? 0} credits.`
+    )
+
+    await loadPage()
+  }
+
   if (loading) {
     return (
       <main>
@@ -345,6 +389,10 @@ export default function StaevnekontorPage() {
           const sortedOptions = [...competition.competition_options]
             .sort((a, b) => a.sort_order - b.sort_order)
 
+          const winnerLabel = sortedOptions.find(
+            option => option.id === competition.winning_option_id
+          )?.label
+
           return (
             <article className="card" key={competition.id}>
               <p>
@@ -363,40 +411,76 @@ export default function StaevnekontorPage() {
                 ))}
               </ul>
 
-              <div className="actions">
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() =>
-                    changeStatus(competition.id, 'draft')
-                  }
-                >
-                  Kladde
-                </button>
+              {competition.status !== 'finished' && (
+                <div className="actions">
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() =>
+                      void changeStatus(competition.id, 'draft')
+                    }
+                  >
+                    Kladde
+                  </button>
 
-                <button
-                  type="button"
-                  onClick={() =>
-                    changeStatus(competition.id, 'open')
-                  }
-                >
-                  Åbn
-                </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void changeStatus(competition.id, 'open')
+                    }
+                  >
+                    Åbn
+                  </button>
 
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() =>
-                    changeStatus(competition.id, 'closed')
-                  }
-                >
-                  Luk
-                </button>
-              </div>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() =>
+                      void changeStatus(competition.id, 'closed')
+                    }
+                  >
+                    Luk
+                  </button>
+                </div>
+              )}
+
+              {competition.status !== 'finished' && (
+                <div className="card">
+                  <h4>Registrér vinder</h4>
+
+                  <p>
+                    Når vinderen vælges, afsluttes dysten, og alle
+                    gevinster udbetales automatisk.
+                  </p>
+
+                  <div className="actions">
+                    {sortedOptions.map(option => (
+                      <button
+                        type="button"
+                        key={option.id}
+                        onClick={() =>
+                          void finishCompetition(competition, option)
+                        }
+                      >
+                        {option.label} vinder
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {competition.status === 'finished' && (
+                <p>
+                  <strong>
+                    Vinder: {winnerLabel ?? 'Ikke fundet'}
+                  </strong>
+                </p>
+              )}
             </article>
           )
         })}
       </section>
+
       <PlayerAdmin />
     </main>
   )
