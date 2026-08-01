@@ -11,6 +11,15 @@ type Player = {
   created_at: string
 }
 
+type CreditTransaction = {
+  id: string
+  amount: number
+  balance_after: number
+  reason: string
+  description: string | null
+  created_at: string
+}
+
 const supabase = createClient()
 
 export default function PlayerAdmin() {
@@ -24,7 +33,13 @@ export default function PlayerAdmin() {
   const [password, setPassword] = useState('')
   const [startCredits, setStartCredits] = useState('1000')
 
-  const [creditAmounts, setCreditAmounts] = useState<Record<string, string>>({})
+  const [creditAmounts, setCreditAmounts] =
+    useState<Record<string, string>>({})
+
+  const [openHistoryId, setOpenHistoryId] = useState('')
+  const [history, setHistory] = useState<
+    Record<string, CreditTransaction[]>
+  >({})
 
   const filteredPlayers = useMemo(() => {
     const query = search.trim().toLowerCase()
@@ -162,8 +177,6 @@ export default function PlayerAdmin() {
       return
     }
 
-    const signedAmount = Math.round(amount) * direction
-
     setWorkingPlayerId(player.id)
     setMessage('')
 
@@ -171,18 +184,59 @@ export default function PlayerAdmin() {
       const result = await adminRequest('PATCH', {
         action: 'credits',
         userId: player.id,
-        amount: signedAmount,
+        amount: Math.round(amount) * direction,
       })
 
       setMessage(
         `${player.display_name} har nu ${result.credits} credits.`
       )
+
+      setHistory(current => {
+        const next = { ...current }
+        delete next[player.id]
+        return next
+      })
+
       await loadPlayers()
     } catch (error) {
       setMessage(
         error instanceof Error
           ? error.message
           : 'Credits kunne ikke ændres.'
+      )
+    } finally {
+      setWorkingPlayerId('')
+    }
+  }
+
+  async function toggleHistory(player: Player) {
+    if (openHistoryId === player.id) {
+      setOpenHistoryId('')
+      return
+    }
+
+    setOpenHistoryId(player.id)
+
+    if (history[player.id]) return
+
+    setWorkingPlayerId(player.id)
+
+    try {
+      const result = await adminRequest(
+        'GET',
+        undefined,
+        `?historyUserId=${encodeURIComponent(player.id)}`
+      )
+
+      setHistory(current => ({
+        ...current,
+        [player.id]: result.history ?? [],
+      }))
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : 'Historikken kunne ikke indlæses.'
       )
     } finally {
       setWorkingPlayerId('')
@@ -323,75 +377,145 @@ export default function PlayerAdmin() {
         {!loading &&
           filteredPlayers.map(player => {
             const isWorking = workingPlayerId === player.id
+            const playerHistory = history[player.id] ?? []
 
             return (
               <article className="row" key={player.id}>
-                <div>
-                  <strong>{player.display_name}</strong>
+                <div style={{ width: '100%' }}>
                   <div>
-                    {player.credits} credits
-                    {player.is_admin ? ' · Administrator' : ''}
+                    <strong>{player.display_name}</strong>
+                    <div>
+                      {player.credits} credits
+                      {player.is_admin ? ' · Administrator' : ''}
+                    </div>
                   </div>
+
+                  {!player.is_admin && (
+                    <div className="actions">
+                      <input
+                        type="number"
+                        min={1}
+                        inputMode="numeric"
+                        value={creditAmounts[player.id] ?? '500'}
+                        onChange={event =>
+                          setCreditAmounts(current => ({
+                            ...current,
+                            [player.id]: event.target.value,
+                          }))
+                        }
+                        aria-label={`Credit-beløb til ${player.display_name}`}
+                        style={{ maxWidth: 120 }}
+                      />
+
+                      <button
+                        type="button"
+                        className="secondary"
+                        disabled={isWorking}
+                        onClick={() => void changeCredits(player, 1)}
+                      >
+                        Tilføj
+                      </button>
+
+                      <button
+                        type="button"
+                        className="secondary"
+                        disabled={isWorking}
+                        onClick={() => void changeCredits(player, -1)}
+                      >
+                        Fratræk
+                      </button>
+
+                      <button
+                        type="button"
+                        className="secondary"
+                        disabled={isWorking}
+                        onClick={() => void toggleHistory(player)}
+                      >
+                        {openHistoryId === player.id
+                          ? 'Skjul historik'
+                          : 'Historik'}
+                      </button>
+
+                      <button
+                        type="button"
+                        className="secondary"
+                        disabled={isWorking}
+                        onClick={() => void resetPassword(player)}
+                      >
+                        Ny kode
+                      </button>
+
+                      <button
+                        type="button"
+                        className="danger"
+                        disabled={isWorking}
+                        onClick={() => void deletePlayer(player)}
+                      >
+                        Slet
+                      </button>
+                    </div>
+                  )}
+
+                  {openHistoryId === player.id && (
+                    <div className="card">
+                      <h4>Credit-historik</h4>
+
+                      {isWorking && <p>Indlæser historik…</p>}
+
+                      {!isWorking && playerHistory.length === 0 && (
+                        <p>Der er ingen registrerede bevægelser endnu.</p>
+                      )}
+
+                      {!isWorking &&
+                        playerHistory.map(transaction => (
+                          <div className="row" key={transaction.id}>
+                            <div>
+                              <strong>
+                                {transaction.amount >= 0 ? '+' : ''}
+                                {transaction.amount} credits
+                              </strong>
+
+                              <div>
+                                {transaction.description ??
+                                  reasonLabel(transaction.reason)}
+                              </div>
+
+                              <small>
+                                {new Date(
+                                  transaction.created_at
+                                ).toLocaleString('da-DK')}
+                              </small>
+                            </div>
+
+                            <strong>
+                              Saldo: {transaction.balance_after}
+                            </strong>
+                          </div>
+                        ))}
+                    </div>
+                  )}
                 </div>
-
-                {!player.is_admin && (
-                  <div className="actions">
-                    <input
-                      type="number"
-                      min={1}
-                      inputMode="numeric"
-                      value={creditAmounts[player.id] ?? '500'}
-                      onChange={event =>
-                        setCreditAmounts(current => ({
-                          ...current,
-                          [player.id]: event.target.value,
-                        }))
-                      }
-                      aria-label={`Credit-beløb til ${player.display_name}`}
-                      style={{ maxWidth: 120 }}
-                    />
-
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={isWorking}
-                      onClick={() => void changeCredits(player, 1)}
-                    >
-                      Tilføj
-                    </button>
-
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={isWorking}
-                      onClick={() => void changeCredits(player, -1)}
-                    >
-                      Fratræk
-                    </button>
-
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={isWorking}
-                      onClick={() => void resetPassword(player)}
-                    >
-                      Ny kode
-                    </button>
-
-                    <button
-                      type="button"
-                      className="danger"
-                      disabled={isWorking}
-                      onClick={() => void deletePlayer(player)}
-                    >
-                      Slet
-                    </button>
-                  </div>
-                )}
               </article>
             )
           })}
       </div>
     </section>
   )
+}
+
+function reasonLabel(reason: string) {
+  switch (reason) {
+    case 'player_created':
+      return 'Spiller oprettet'
+    case 'admin_adjustment':
+      return 'Manuel ændring'
+    case 'prediction_stake':
+      return 'Indsats'
+    case 'prediction_payout':
+      return 'Gevinst'
+    case 'game_reset':
+      return 'Nyt spil'
+    default:
+      return reason
+  }
 }

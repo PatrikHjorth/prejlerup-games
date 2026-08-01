@@ -97,6 +97,34 @@ export async function GET(request: NextRequest) {
     return authorization.error
   }
 
+  const historyUserId =
+    request.nextUrl.searchParams.get('historyUserId')
+
+  if (historyUserId) {
+    const { data, error } = await authorization.adminClient
+      .from('credit_transactions')
+      .select(`
+        id,
+        amount,
+        balance_after,
+        reason,
+        description,
+        created_at
+      `)
+      .eq('user_id', historyUserId)
+      .order('created_at', { ascending: false })
+      .limit(100)
+
+    if (error) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: 400 }
+      )
+    }
+
+    return NextResponse.json({ history: data ?? [] })
+  }
+
   const { data, error } = await authorization.adminClient
     .from('profiles')
     .select('id, display_name, credits, is_admin, created_at')
@@ -175,12 +203,14 @@ export async function POST(request: NextRequest) {
     )
   }
 
+  const roundedCredits = Math.round(credits)
+
   const { error: profileError } = await authorization.adminClient
     .from('profiles')
     .upsert({
       id: data.user.id,
       display_name: name,
-      credits: Math.round(credits),
+      credits: roundedCredits,
       is_admin: false,
     })
 
@@ -195,12 +225,30 @@ export async function POST(request: NextRequest) {
     )
   }
 
+  const { error: historyError } = await authorization.adminClient
+    .from('credit_transactions')
+    .insert({
+      user_id: data.user.id,
+      amount: roundedCredits,
+      balance_after: roundedCredits,
+      reason: 'player_created',
+      description: 'Spiller oprettet',
+      created_by: authorization.currentUser.id,
+    })
+
+  if (historyError) {
+    return NextResponse.json(
+      { error: historyError.message },
+      { status: 400 }
+    )
+  }
+
   return NextResponse.json({
     success: true,
     player: {
       id: data.user.id,
       display_name: name,
-      credits: Math.round(credits),
+      credits: roundedCredits,
       is_admin: false,
     },
   })
@@ -278,10 +326,13 @@ export async function PATCH(request: NextRequest) {
       )
     }
 
+    const roundedAmount = Math.round(amount)
     const newCredits = Math.max(
       0,
-      Number(profile.credits) + Math.round(amount)
+      Number(profile.credits) + roundedAmount
     )
+
+    const actualAmount = newCredits - Number(profile.credits)
 
     const { error } = await authorization.adminClient
       .from('profiles')
@@ -291,6 +342,27 @@ export async function PATCH(request: NextRequest) {
     if (error) {
       return NextResponse.json(
         { error: error.message },
+        { status: 400 }
+      )
+    }
+
+    const { error: historyError } = await authorization.adminClient
+      .from('credit_transactions')
+      .insert({
+        user_id: userId,
+        amount: actualAmount,
+        balance_after: newCredits,
+        reason: 'admin_adjustment',
+        description:
+          actualAmount >= 0
+            ? 'Credits tilføjet af Admin'
+            : 'Credits fratrukket af Admin',
+        created_by: authorization.currentUser.id,
+      })
+
+    if (historyError) {
+      return NextResponse.json(
+        { error: historyError.message },
         { status: 400 }
       )
     }
@@ -356,5 +428,3 @@ export async function DELETE(request: NextRequest) {
 
   return NextResponse.json({ success: true })
 }
-
-
