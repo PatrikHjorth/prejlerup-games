@@ -1,6 +1,6 @@
 'use client'
 
-import { FormEvent, useEffect, useState } from 'react'
+import { FormEvent, useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase'
 
 type Player = {
@@ -16,12 +16,23 @@ const supabase = createClient()
 export default function PlayerAdmin() {
   const [players, setPlayers] = useState<Player[]>([])
   const [loading, setLoading] = useState(true)
-  const [working, setWorking] = useState(false)
+  const [workingPlayerId, setWorkingPlayerId] = useState('')
   const [message, setMessage] = useState('')
+  const [search, setSearch] = useState('')
 
   const [name, setName] = useState('')
   const [password, setPassword] = useState('')
   const [startCredits, setStartCredits] = useState('1000')
+
+  const [creditAmounts, setCreditAmounts] = useState<Record<string, string>>({})
+
+  const filteredPlayers = useMemo(() => {
+    const query = search.trim().toLowerCase()
+    if (!query) return players
+    return players.filter(player =>
+      player.display_name.toLowerCase().includes(query)
+    )
+  }, [players, search])
 
   async function getAccessToken() {
     const {
@@ -46,14 +57,19 @@ export default function PlayerAdmin() {
       method,
       headers: {
         Authorization: `Bearer ${token}`,
-        ...(body
-          ? { 'Content-Type': 'application/json' }
-          : {}),
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
       },
       body: body ? JSON.stringify(body) : undefined,
     })
 
-    const result = await response.json()
+    const contentType = response.headers.get('content-type') ?? ''
+    const rawText = await response.text()
+
+    if (!contentType.includes('application/json')) {
+      throw new Error(`API-ruten svarede med status ${response.status}.`)
+    }
+
+    const result = JSON.parse(rawText)
 
     if (!response.ok) {
       throw new Error(result.error || 'Handlingen mislykkedes.')
@@ -67,7 +83,16 @@ export default function PlayerAdmin() {
 
     try {
       const result = await adminRequest('GET')
-      setPlayers(result.players ?? [])
+      const loadedPlayers = (result.players ?? []) as Player[]
+      setPlayers(loadedPlayers)
+
+      setCreditAmounts(current => {
+        const next = { ...current }
+        for (const player of loadedPlayers) {
+          if (!(player.id in next)) next[player.id] = '500'
+        }
+        return next
+      })
     } catch (error) {
       setMessage(
         error instanceof Error
@@ -83,9 +108,7 @@ export default function PlayerAdmin() {
     void loadPlayers()
   }, [])
 
-  async function createPlayer(
-    event: FormEvent<HTMLFormElement>
-  ) {
+  async function createPlayer(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
 
     const credits = Number(startCredits)
@@ -105,7 +128,7 @@ export default function PlayerAdmin() {
       return
     }
 
-    setWorking(true)
+    setWorkingPlayerId('create')
     setMessage('')
 
     try {
@@ -119,7 +142,6 @@ export default function PlayerAdmin() {
       setPassword('')
       setStartCredits('1000')
       setMessage('Spilleren er oprettet.')
-
       await loadPlayers()
     } catch (error) {
       setMessage(
@@ -128,28 +150,33 @@ export default function PlayerAdmin() {
           : 'Spilleren kunne ikke oprettes.'
       )
     } finally {
-      setWorking(false)
+      setWorkingPlayerId('')
     }
   }
 
-  async function changeCredits(
-    player: Player,
-    amount: number
-  ) {
-    setWorking(true)
+  async function changeCredits(player: Player, direction: 1 | -1) {
+    const amount = Number(creditAmounts[player.id] ?? '')
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setMessage('Skriv et gyldigt beløb større end 0.')
+      return
+    }
+
+    const signedAmount = Math.round(amount) * direction
+
+    setWorkingPlayerId(player.id)
     setMessage('')
 
     try {
       const result = await adminRequest('PATCH', {
         action: 'credits',
         userId: player.id,
-        amount,
+        amount: signedAmount,
       })
 
       setMessage(
         `${player.display_name} har nu ${result.credits} credits.`
       )
-
       await loadPlayers()
     } catch (error) {
       setMessage(
@@ -158,7 +185,7 @@ export default function PlayerAdmin() {
           : 'Credits kunne ikke ændres.'
       )
     } finally {
-      setWorking(false)
+      setWorkingPlayerId('')
     }
   }
 
@@ -174,7 +201,7 @@ export default function PlayerAdmin() {
       return
     }
 
-    setWorking(true)
+    setWorkingPlayerId(player.id)
     setMessage('')
 
     try {
@@ -194,7 +221,7 @@ export default function PlayerAdmin() {
           : 'Koden kunne ikke nulstilles.'
       )
     } finally {
-      setWorking(false)
+      setWorkingPlayerId('')
     }
   }
 
@@ -205,7 +232,7 @@ export default function PlayerAdmin() {
 
     if (!confirmed) return
 
-    setWorking(true)
+    setWorkingPlayerId(player.id)
     setMessage('')
 
     try {
@@ -224,7 +251,7 @@ export default function PlayerAdmin() {
           : 'Spilleren kunne ikke slettes.'
       )
     } finally {
-      setWorking(false)
+      setWorkingPlayerId('')
     }
   }
 
@@ -254,9 +281,7 @@ export default function PlayerAdmin() {
             type="text"
             minLength={6}
             value={password}
-            onChange={event =>
-              setPassword(event.target.value)
-            }
+            onChange={event => setPassword(event.target.value)}
             placeholder="Mindst 6 tegn"
           />
         </label>
@@ -268,70 +293,87 @@ export default function PlayerAdmin() {
             type="number"
             min={0}
             value={startCredits}
-            onChange={event =>
-              setStartCredits(event.target.value)
-            }
+            onChange={event => setStartCredits(event.target.value)}
           />
         </label>
 
-        <button type="submit" disabled={working}>
-          {working ? 'Opretter…' : 'Opret spiller'}
+        <button type="submit" disabled={workingPlayerId === 'create'}>
+          {workingPlayerId === 'create' ? 'Opretter…' : 'Opret spiller'}
         </button>
       </form>
 
       <div className="card">
         <h3>Administrér spillere</h3>
 
+        <label>
+          Søg efter spiller
+          <input
+            value={search}
+            onChange={event => setSearch(event.target.value)}
+            placeholder="Skriv et navn"
+          />
+        </label>
+
         {loading && <p>Indlæser spillere…</p>}
 
-        {!loading && players.length === 0 && (
-          <p>Der er ingen spillere endnu.</p>
+        {!loading && filteredPlayers.length === 0 && (
+          <p>Ingen spillere matcher søgningen.</p>
         )}
 
         {!loading &&
-          players.map(player => (
-            <article className="row" key={player.id}>
-              <div>
-                <strong>{player.display_name}</strong>
+          filteredPlayers.map(player => {
+            const isWorking = workingPlayerId === player.id
 
+            return (
+              <article className="row" key={player.id}>
                 <div>
-                  {player.credits} credits
-                  {player.is_admin ? ' · Administrator' : ''}
+                  <strong>{player.display_name}</strong>
+                  <div>
+                    {player.credits} credits
+                    {player.is_admin ? ' · Administrator' : ''}
+                  </div>
                 </div>
-              </div>
 
-              <div className="actions">
                 {!player.is_admin && (
-                  <>
+                  <div className="actions">
+                    <input
+                      type="number"
+                      min={1}
+                      inputMode="numeric"
+                      value={creditAmounts[player.id] ?? '500'}
+                      onChange={event =>
+                        setCreditAmounts(current => ({
+                          ...current,
+                          [player.id]: event.target.value,
+                        }))
+                      }
+                      aria-label={`Credit-beløb til ${player.display_name}`}
+                      style={{ maxWidth: 120 }}
+                    />
+
                     <button
                       type="button"
                       className="secondary"
-                      disabled={working}
-                      onClick={() =>
-                        void changeCredits(player, 500)
-                      }
+                      disabled={isWorking}
+                      onClick={() => void changeCredits(player, 1)}
                     >
-                      +500
+                      Tilføj
                     </button>
 
                     <button
                       type="button"
                       className="secondary"
-                      disabled={working}
-                      onClick={() =>
-                        void changeCredits(player, -500)
-                      }
+                      disabled={isWorking}
+                      onClick={() => void changeCredits(player, -1)}
                     >
-                      −500
+                      Fratræk
                     </button>
 
                     <button
                       type="button"
                       className="secondary"
-                      disabled={working}
-                      onClick={() =>
-                        void resetPassword(player)
-                      }
+                      disabled={isWorking}
+                      onClick={() => void resetPassword(player)}
                     >
                       Ny kode
                     </button>
@@ -339,18 +381,16 @@ export default function PlayerAdmin() {
                     <button
                       type="button"
                       className="danger"
-                      disabled={working}
-                      onClick={() =>
-                        void deletePlayer(player)
-                      }
+                      disabled={isWorking}
+                      onClick={() => void deletePlayer(player)}
                     >
                       Slet
                     </button>
-                  </>
+                  </div>
                 )}
-              </div>
-            </article>
-          ))}
+              </article>
+            )
+          })}
       </div>
     </section>
   )
