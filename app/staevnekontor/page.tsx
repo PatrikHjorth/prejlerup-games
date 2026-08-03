@@ -1,5 +1,5 @@
 'use client'
-
+import ResetGame from './reset-game'
 import { FormEvent, useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase'
 import PlayerAdmin from './players'
@@ -278,6 +278,7 @@ export default function StaevnekontorPage() {
         <h1>Stævnekontor</h1>
         <p>{message || 'Du har ikke adgang til denne side.'}</p>
         <a href="/">Tilbage til forsiden</a>
+        <ResetGame />
       </main>
     )
   }
