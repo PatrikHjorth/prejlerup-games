@@ -14,6 +14,16 @@ type CompetitionOption = {
   id: string
   label: string
   sort_order: number
+  base_odds: number
+}
+
+type OptionOdds = {
+  option_id: string
+  label: string
+  base_odds: number
+  live_odds: number
+  total_stake: number
+  prediction_count: number
 }
 
 type Competition = {
@@ -70,6 +80,9 @@ export default function Home() {
   const [competitions, setCompetitions] = useState<Competition[]>([])
   const [predictions, setPredictions] = useState<Prediction[]>([])
   const [notices, setNotices] = useState<Notice[]>([])
+  const [competitionOdds, setCompetitionOdds] = useState<
+    Record<string, OptionOdds[]>
+  >({})
 
   const [tab, setTab] = useState('spil')
   const [activeCompetitionId, setActiveCompetitionId] = useState('')
@@ -116,7 +129,8 @@ export default function Home() {
           competition_options (
             id,
             label,
-            sort_order
+            sort_order,
+            base_odds
           )
         `)
         .in('status', ['open', 'closed', 'finished'])
@@ -157,14 +171,40 @@ export default function Home() {
       setMessage(noticesResult.error.message)
     }
 
-    setProfile(profileResult.data as Profile | null)
-    setCompetitions(
+    const loadedCompetitions =
       (competitionsResult.data ?? []) as Competition[]
-    )
+
+    setProfile(profileResult.data as Profile | null)
+    setCompetitions(loadedCompetitions)
     setPredictions(
       (predictionsResult.data ?? []) as Prediction[]
     )
     setNotices((noticesResult.data ?? []) as Notice[])
+
+    const oddsEntries = await Promise.all(
+      loadedCompetitions.map(async competition => {
+        const { data, error } = await supabase.rpc(
+          'get_competition_odds',
+          { p_competition_id: competition.id }
+        )
+
+        if (error) {
+          return [competition.id, []] as const
+        }
+
+        const rows = ((data ?? []) as OptionOdds[]).map(row => ({
+          ...row,
+          base_odds: Number(row.base_odds),
+          live_odds: Number(row.live_odds),
+          total_stake: Number(row.total_stake),
+          prediction_count: Number(row.prediction_count),
+        }))
+
+        return [competition.id, rows] as const
+      })
+    )
+
+    setCompetitionOdds(Object.fromEntries(oddsEntries))
     setSessionReady(true)
   }
 
@@ -197,6 +237,15 @@ export default function Home() {
           event: '*',
           schema: 'public',
           table: 'profiles',
+        },
+        () => void load()
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'predictions',
         },
         () => void load()
       )
@@ -254,7 +303,18 @@ export default function Home() {
       )
     : undefined
 
-  const odds = 2
+  const activeOdds = activeCompetition
+    ? competitionOdds[activeCompetition.id] ?? []
+    : []
+
+  const selectedOdds = activeCompetition
+    ? activeOdds.find(row => row.option_id === selectedOptionId)
+        ?.live_odds ??
+      activeCompetition.competition_options.find(
+        option => option.id === selectedOptionId
+      )?.base_odds ??
+      2
+    : 2
 
   async function placePrediction() {
     if (!profile || !activeCompetition || !selectedOptionId) {
@@ -278,7 +338,7 @@ export default function Home() {
       p_competition_id: activeCompetition.id,
       p_option_id: selectedOptionId,
       p_stake: stake,
-      p_odds: odds,
+      p_odds: selectedOdds,
     })
 
     if (error) {
@@ -353,7 +413,8 @@ export default function Home() {
             setSelectedOptionId={setSelectedOptionId}
             stake={stake}
             setStake={setStake}
-            odds={odds}
+            odds={selectedOdds}
+            oddsRows={activeOdds}
             existingPrediction={existingPrediction}
             placing={placing}
             placePrediction={placePrediction}
@@ -414,6 +475,7 @@ function CompetitionGame({
   stake,
   setStake,
   odds,
+  oddsRows,
   existingPrediction,
   placing,
   placePrediction,
@@ -429,6 +491,7 @@ function CompetitionGame({
   stake: number
   setStake: (stake: number) => void
   odds: number
+  oddsRows: OptionOdds[]
   existingPrediction: Prediction | undefined
   placing: boolean
   placePrediction: () => Promise<void>
@@ -525,6 +588,13 @@ function CompetitionGame({
             selectedOptionId === option.id ||
             existingPrediction?.option_id === option.id
 
+          const oddsRow = oddsRows.find(
+            row => row.option_id === option.id
+          )
+
+          const optionOdds =
+            oddsRow?.live_odds ?? Number(option.base_odds)
+
           return (
             <button
               type="button"
@@ -534,7 +604,11 @@ function CompetitionGame({
               onClick={() => setSelectedOptionId(option.id)}
             >
               <strong>{option.label}</strong>
-              <span>Odds {odds.toFixed(2)}</span>
+              <span>Odds {optionOdds.toFixed(2)}</span>
+              <small>
+                {oddsRow?.prediction_count ?? 0} spil ·{' '}
+                {oddsRow?.total_stake ?? 0} credits
+              </small>
             </button>
           )
         })}

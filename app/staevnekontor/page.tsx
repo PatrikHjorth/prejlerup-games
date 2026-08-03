@@ -14,6 +14,21 @@ type CompetitionOption = {
   id: string
   label: string
   sort_order: number
+  base_odds: number
+}
+
+type DraftOption = {
+  label: string
+  baseOdds: string
+}
+
+type OptionOdds = {
+  option_id: string
+  label: string
+  base_odds: number
+  live_odds: number
+  total_stake: number
+  prediction_count: number
 }
 
 type Competition = {
@@ -31,6 +46,9 @@ export default function StaevnekontorPage() {
 
   const [profile, setProfile] = useState<Profile | null>(null)
   const [competitions, setCompetitions] = useState<Competition[]>([])
+  const [competitionOdds, setCompetitionOdds] = useState<
+    Record<string, OptionOdds[]>
+  >({})
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
@@ -39,7 +57,10 @@ export default function StaevnekontorPage() {
   const [description, setDescription] = useState('')
   const [deadline, setDeadline] = useState('')
   const [status, setStatus] = useState<'draft' | 'open'>('draft')
-  const [options, setOptions] = useState(['', ''])
+  const [options, setOptions] = useState<DraftOption[]>([
+    { label: '', baseOdds: '2.00' },
+    { label: '', baseOdds: '2.00' },
+  ])
 
   useEffect(() => {
     void loadPage()
@@ -92,7 +113,8 @@ export default function StaevnekontorPage() {
         competition_options (
           id,
           label,
-          sort_order
+          sort_order,
+          base_odds
         )
       `)
       .order('created_at', { ascending: false })
@@ -100,16 +122,44 @@ export default function StaevnekontorPage() {
     if (error) {
       setMessage(error.message)
     } else {
-      setCompetitions((data ?? []) as Competition[])
+      const loadedCompetitions = (data ?? []) as Competition[]
+      setCompetitions(loadedCompetitions)
+
+      const oddsEntries = await Promise.all(
+        loadedCompetitions.map(async competition => {
+          const { data: oddsData } = await supabase.rpc(
+            'get_competition_odds',
+            { p_competition_id: competition.id }
+          )
+
+          const rows = ((oddsData ?? []) as OptionOdds[]).map(row => ({
+            ...row,
+            base_odds: Number(row.base_odds),
+            live_odds: Number(row.live_odds),
+            total_stake: Number(row.total_stake),
+            prediction_count: Number(row.prediction_count),
+          }))
+
+          return [competition.id, rows] as const
+        })
+      )
+
+      setCompetitionOdds(Object.fromEntries(oddsEntries))
     }
 
     setLoading(false)
   }
 
-  function updateOption(index: number, value: string) {
+  function updateOption(
+    index: number,
+    field: keyof DraftOption,
+    value: string
+  ) {
     setOptions(current =>
       current.map((option, optionIndex) =>
-        optionIndex === index ? value : option
+        optionIndex === index
+          ? { ...option, [field]: value }
+          : option
       )
     )
   }
@@ -126,8 +176,11 @@ export default function StaevnekontorPage() {
     event.preventDefault()
 
     const cleanedOptions = options
-      .map(option => option.trim())
-      .filter(Boolean)
+      .map(option => ({
+        label: option.label.trim(),
+        baseOdds: Number(option.baseOdds),
+      }))
+      .filter(option => option.label)
 
     if (!profile?.is_admin) {
       setMessage('Du har ikke adgang til at oprette dyster.')
@@ -141,6 +194,18 @@ export default function StaevnekontorPage() {
 
     if (cleanedOptions.length < 2) {
       setMessage('Tilføj mindst to valgmuligheder.')
+      return
+    }
+
+    if (
+      cleanedOptions.some(
+        option =>
+          !Number.isFinite(option.baseOdds) ||
+          option.baseOdds < 1.01 ||
+          option.baseOdds > 100
+      )
+    ) {
+      setMessage('Alle startodds skal være mellem 1,01 og 100,00.')
       return
     }
 
@@ -169,9 +234,10 @@ export default function StaevnekontorPage() {
       return
     }
 
-    const optionRows = cleanedOptions.map((label, index) => ({
+    const optionRows = cleanedOptions.map((option, index) => ({
       competition_id: competition.id,
-      label,
+      label: option.label,
+      base_odds: option.baseOdds,
       sort_order: index,
     }))
 
@@ -194,7 +260,10 @@ export default function StaevnekontorPage() {
     setDescription('')
     setDeadline('')
     setStatus('draft')
-    setOptions(['', ''])
+    setOptions([
+      { label: '', baseOdds: '2.00' },
+      { label: '', baseOdds: '2.00' },
+    ])
     setMessage('Dysten er oprettet.')
 
     await loadPage()
@@ -343,11 +412,26 @@ export default function StaevnekontorPage() {
           <div className="optionInput" key={index}>
             <input
               required
-              value={option}
+              value={option.label}
               onChange={event =>
-                updateOption(index, event.target.value)
+                updateOption(index, 'label', event.target.value)
               }
               placeholder={`Valgmulighed ${index + 1}`}
+            />
+
+            <input
+              required
+              type="number"
+              min="1.01"
+              max="100"
+              step="0.01"
+              value={option.baseOdds}
+              onChange={event =>
+                updateOption(index, 'baseOdds', event.target.value)
+              }
+              aria-label={`Startodds for valgmulighed ${index + 1}`}
+              placeholder="Startodds"
+              style={{ maxWidth: 130 }}
             />
 
             <button
@@ -365,7 +449,12 @@ export default function StaevnekontorPage() {
           <button
             type="button"
             className="secondary"
-            onClick={() => setOptions(current => [...current, ''])}
+            onClick={() =>
+              setOptions(current => [
+                ...current,
+                { label: '', baseOdds: '2.00' },
+              ])
+            }
           >
             + Tilføj valgmulighed
           </button>
@@ -406,9 +495,21 @@ export default function StaevnekontorPage() {
               )}
 
               <ul>
-                {sortedOptions.map(option => (
-                  <li key={option.id}>{option.label}</li>
-                ))}
+                {sortedOptions.map(option => {
+                  const oddsRow = competitionOdds[competition.id]?.find(
+                    row => row.option_id === option.id
+                  )
+
+                  return (
+                    <li key={option.id}>
+                      <strong>{option.label}</strong>{' '}
+                      · start {Number(option.base_odds).toFixed(2)}{' '}
+                      · live {(oddsRow?.live_odds ?? Number(option.base_odds)).toFixed(2)}{' '}
+                      · {oddsRow?.prediction_count ?? 0} spil{' '}
+                      · {oddsRow?.total_stake ?? 0} credits
+                    </li>
+                  )
+                })}
               </ul>
 
               {competition.status !== 'finished' && (
