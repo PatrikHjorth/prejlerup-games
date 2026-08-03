@@ -278,7 +278,6 @@ export default function StaevnekontorPage() {
         <h1>Stævnekontor</h1>
         <p>{message || 'Du har ikke adgang til denne side.'}</p>
         <a href="/">Tilbage til forsiden</a>
-        <ResetGame />
       </main>
     )
   }
@@ -483,6 +482,7 @@ export default function StaevnekontorPage() {
       </section>
 
       <PlayerAdmin />
+      <ResetGame />
     </main>
   )
 }
